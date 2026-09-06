@@ -1,0 +1,11 @@
+{
+  "signal_id": "example-strategy-EURUSD-sell-0001",
+  "timestamp": "2026-09-06T03:15:00Z",
+  "symbol": "EURUSD",
+  "action": "SELL",
+  "risk_percent": 0.5,
+  "stop_loss": 1.0950,
+  "take_profit": 1.0850,
+  "strategy": "EMA Cross",
+  "comment": "example sell signal"
+}

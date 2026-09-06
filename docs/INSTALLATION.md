@@ -52,7 +52,18 @@ This calls `/health`, `/api/status`, and submits one dry-run signal from
 
 ## Auto-start
 
-See `docs/SECURITY.md` and the **Windows Deployment** section of the README
-for why Task Scheduler at user logon is the currently validated option, and
-why a Windows Service is not assumed to work without testing on your
-specific MT5/broker/session configuration.
+```powershell
+.\scripts\install-autostart.ps1
+```
+
+Registers a Windows Task Scheduler task that starts the bridge at user
+logon. See the **Windows Deployment** section of the README for why Task
+Scheduler is the currently validated option -- a Windows Service was not
+implemented, since MT5's Python integration expects an interactive user
+session and this was never tested running headless in Session 0.
+
+```powershell
+.\scripts\uninstall-autostart.ps1
+```
+
+removes it.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 logger = logging.getLogger("mt5_bridge.mt5_gateway")
@@ -70,7 +71,7 @@ class MT5Gateway:
         ok = self._mt5.initialize(terminal_path, **kwargs) if terminal_path else self._mt5.initialize(**kwargs)
         self._connected = bool(ok)
         if not ok:
-            logger.warning("MT5_INITIALIZE_FAILED error=%s", self._safe_last_error())
+            logger.warning("MT5_INITIALIZE_FAILED error=%s", self.last_error())
         return self._connected
 
     def shutdown(self) -> None:
@@ -78,7 +79,8 @@ class MT5Gateway:
             self._mt5.shutdown()
         self._connected = False
 
-    def _safe_last_error(self) -> Any:
+    def last_error(self) -> Any:
+        """Safe (credential-free) diagnostic info: MT5's (code, description) tuple."""
         try:
             return self._mt5.last_error() if self._mt5 else None
         except Exception:  # noqa: BLE001 -- native SDK call, exception type is not documented
@@ -91,24 +93,54 @@ class MT5Gateway:
         return self._mt5.symbol_info(symbol) if self._mt5 else None
 
     def ensure_symbol(self, symbol: str) -> Any:
-        """Return symbol_info, selecting it in Market Watch if not already visible."""
+        """Return symbol_info, selecting it in Market Watch if missing OR not visible.
+
+        symbol_info() existing is not the same as the symbol being usable --
+        a symbol can exist but be hidden from Market Watch (visible=False),
+        which still requires an explicit symbol_select() before quotes/trading work.
+        """
         if self._mt5 is None:
             return None
         info = self._mt5.symbol_info(symbol)
-        if info is not None:
+        if info is not None and getattr(info, "visible", True):
             return info
-        if self._mt5.symbol_select(symbol, True):
-            return self._mt5.symbol_info(symbol)
-        return None
+        if not self._mt5.symbol_select(symbol, True):
+            return None
+        return self._mt5.symbol_info(symbol)
 
     def symbol_info_tick(self, symbol: str) -> Any:
         return self._mt5.symbol_info_tick(symbol) if self._mt5 else None
 
-    def positions_get(self, **kwargs: Any) -> list[Any]:
+    def server_time(self, reference_symbol: str) -> datetime | None:
+        """Broker/server time, derived from the reference symbol's last tick.
+
+        MT5 tick timestamps reflect the broker server's own clock, not
+        necessarily UTC -- callers must never substitute local/UTC time for
+        this when computing a trading-day identity (daily-loss baseline,
+        daily trade count, daily state key).
+        """
+        tick = self.symbol_info_tick(reference_symbol)
+        if tick is None:
+            return None
+        try:
+            return datetime.fromtimestamp(tick.time, tz=UTC)
+        except (OSError, OverflowError, ValueError, AttributeError, TypeError):
+            return None
+
+    def positions_get(self, **kwargs: Any) -> list[Any] | None:
+        """Return open positions, or None if MT5 failed to answer.
+
+        MT5's positions_get() returns None on a genuine query failure and an
+        (possibly empty) tuple on success. Collapsing None into [] would let
+        an infrastructure failure look identical to "zero open positions" --
+        unknown must never equal zero for a risk control.
+        """
         if self._mt5 is None:
-            return []
+            return None
         result = self._mt5.positions_get(**kwargs)
-        return list(result) if result is not None else []
+        if result is None:
+            return None
+        return list(result)
 
     def history_deals_get(self, date_from: Any, date_to: Any, **kwargs: Any) -> list[Any]:
         if self._mt5 is None:

@@ -71,3 +71,62 @@ def test_ambiguous_execution_state_review_required(gateway: MT5Gateway, db: Data
     row = _submit_and_claim(db, "exec-ambiguous")
     status = service.process_signal(row)
     assert status == ExecutionStatus.REVIEW_REQUIRED
+
+
+def test_order_send_partial_fill_recorded_and_not_retried(gateway: MT5Gateway, db: Database, symbol_mapper, settings, fake_mt5):
+    from types import SimpleNamespace
+
+    fake_mt5.order_send_result = SimpleNamespace(
+        retcode=10010, comment="partial", order=901, deal=902, volume=0.05, price=1.0901
+    )
+    live_settings = _live_settings(settings)
+    service = ExecutionService(gateway, db, symbol_mapper, live_settings)
+    row = _submit_and_claim(db, "exec-partial")
+    status = service.process_signal(row)
+
+    assert status == ExecutionStatus.EXECUTED_PARTIAL
+    executions = db.get_executions_for_signal("exec-partial")
+    assert executions[-1]["order_ticket"] == 901
+    assert executions[-1]["executed_volume"] == 0.05
+    assert executions[-1]["executed_price"] == 1.0901
+    assert len(fake_mt5.sent_requests) == 1  # no second order_send
+
+
+def test_order_send_placed_is_review_required(gateway: MT5Gateway, db: Database, symbol_mapper, settings, fake_mt5):
+    from types import SimpleNamespace
+
+    fake_mt5.order_send_result = SimpleNamespace(retcode=10008, comment="placed", order=1, deal=0)
+    live_settings = _live_settings(settings)
+    service = ExecutionService(gateway, db, symbol_mapper, live_settings)
+    row = _submit_and_claim(db, "exec-placed")
+    status = service.process_signal(row)
+
+    assert status == ExecutionStatus.REVIEW_REQUIRED
+    assert len(fake_mt5.sent_requests) == 1  # no second order_send
+
+
+def test_order_send_done_still_executed(gateway: MT5Gateway, db: Database, symbol_mapper, settings, fake_mt5):
+    live_settings = _live_settings(settings)
+    service = ExecutionService(gateway, db, symbol_mapper, live_settings)
+    row = _submit_and_claim(db, "exec-done")
+    status = service.process_signal(row)
+    assert status == ExecutionStatus.EXECUTED
+
+
+def test_positions_query_failure_fails_closed(execution_service: ExecutionService, db: Database, fake_mt5):
+    fake_mt5.positions_fail = True
+    row = _submit_and_claim(db, "exec-positions-unknown")
+    status = execution_service.process_signal(row)
+
+    assert status == ExecutionStatus.FAILED_MT5_STATE_UNKNOWN
+    assert len(fake_mt5.checked_requests) == 0  # order_check never reached
+    assert len(fake_mt5.sent_requests) == 0  # order_send never reached
+
+
+def test_symbol_normalized_persisted_even_on_later_rejection(execution_service: ExecutionService, db: Database, fake_mt5):
+    fake_mt5.positions_fail = True  # forces a later-stage failure
+    row = _submit_and_claim(db, "exec-symbol-persist")
+    execution_service.process_signal(row)
+
+    signal = db.get_signal("exec-symbol-persist")
+    assert signal["symbol_normalized"] == "EURUSD"

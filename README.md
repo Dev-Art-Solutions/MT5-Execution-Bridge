@@ -55,7 +55,7 @@ non-loopback address unless `ALLOW_REMOTE_BINDING=true` is explicitly set.
 ## Signal lifecycle
 
 ```text
-PENDING -> PROCESSING -> DRY_RUN_APPROVED | EXECUTED | REJECTED_* | REVIEW_REQUIRED
+PENDING -> PROCESSING -> DRY_RUN_APPROVED | EXECUTED | EXECUTED_PARTIAL | REJECTED_* | FAILED_* | REVIEW_REQUIRED
 ```
 
 See `docs/SIGNAL_SCHEMA.md` and `app/models/enums.py` for the full status enum.
@@ -90,6 +90,14 @@ open-position limit, daily-loss guard, risk-percent bound, risk-based
 volume calculation, `order_check()`, and only then `order_send()`. See
 `docs/VALIDATION.md`.
 
+Daily state (loss baseline, trade count) is keyed by the MT5 **server's own
+clock**, not UTC or the host machine's local time -- and namespaced by
+broker server + account login, so switching MT5 accounts while reusing the
+same database can never inherit another account's daily numbers. If the
+broker's time or account identity cannot be determined, the pipeline fails
+closed (`FAILED_BROKER_TIME_UNKNOWN`, `FAILED_MT5_UNAVAILABLE`) rather than
+falling back to a guess.
+
 ## Dry run
 
 `DRY_RUN=true` (the default) runs the entire pipeline -- including
@@ -110,6 +118,17 @@ set) is the source of truth.
 actually supports rather than a single hard-coded value, and every order
 carries a bridge-generated `MEB:<hash>` comment used for post-crash
 reconciliation (see **Safety Claims** below).
+
+`order_send()` retcodes are modeled honestly, not collapsed into
+success/failure: `TRADE_RETCODE_DONE` (10009) is `EXECUTED`;
+`TRADE_RETCODE_DONE_PARTIAL` (10010) is `EXECUTED_PARTIAL` -- real exposure
+at less than the requested volume, recorded with whatever fill
+price/volume the broker returned, and never automatically topped up; an
+unexpected `TRADE_RETCODE_PLACED` (10008) for what is always a market
+order is treated as `REVIEW_REQUIRED` rather than assumed safe. A missing
+MT5 position query result (`positions_get()` returning `None`, not an
+empty list) is `FAILED_MT5_STATE_UNKNOWN` -- unknown is never treated as
+zero for a risk control.
 
 ## Python client
 
@@ -157,6 +176,12 @@ pass on an MT5 demo account before enabling live execution.
 - durable, restart-safe duplicate protection
 - no blind retry after `order_send()` -- an ambiguous outcome becomes
   `REVIEW_REQUIRED`, reconciled against MT5 history, never resent
+- unknown MT5 state (a failed position query, an undeterminable broker
+  clock) fails closed -- never treated as safe or as zero
+- daily risk state is namespaced by broker server + account login, never
+  shared across accounts or brokers in the same database
+- configuration and signal values reject out-of-range and non-finite
+  (NaN/Infinity) numbers at the boundary, not deep inside the pipeline
 
 ## Limitations
 

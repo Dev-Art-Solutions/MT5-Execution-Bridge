@@ -22,11 +22,29 @@ logger = logging.getLogger("mt5_bridge.execution_service")
 MAX_MT5_CONNECT_ATTEMPTS = 3
 RECONCILIATION_LOOKBACK = timedelta(days=3)
 
+# order_send()/order_check() retcodes this bridge treats specially.
+TRADE_RETCODE_PLACED = 10008
+TRADE_RETCODE_DONE = 10009
+TRADE_RETCODE_DONE_PARTIAL = 10010
+
 
 def meb_comment(signal_id: str) -> str:
     """Deterministic short comment tag used to find an order again after a crash."""
     digest = hashlib.sha256(signal_id.encode("utf-8")).hexdigest()[:10]
     return f"MEB:{digest}"
+
+
+def account_key_for(account_info: Any) -> str | None:
+    """Namespace key for daily risk state: broker/server identity + login.
+
+    Returns None if the identity cannot be established reliably -- daily
+    state must never be evaluated against an anonymous/shared baseline.
+    """
+    server = getattr(account_info, "server", None)
+    login = getattr(account_info, "login", None)
+    if not server or not str(server).strip() or not login:
+        return None
+    return f"{server}|{login}"
 
 
 class ExecutionService:
@@ -82,6 +100,7 @@ class ExecutionService:
 
         execution_fields: dict[str, Any] = {
             "signal_id": signal_id,
+            "account_key": None,
             "attempt": attempt,
             "started_at": started_at,
             "finished_at": None,
@@ -96,6 +115,8 @@ class ExecutionService:
             "order_send_retcode": None,
             "order_ticket": None,
             "deal_ticket": None,
+            "executed_volume": None,
+            "executed_price": None,
             "result_message": None,
             "status": ExecutionStatus.PROCESSING.value,
         }
@@ -129,10 +150,26 @@ class ExecutionService:
             return finish(ExecutionStatus.REJECTED_SYMBOL, f"No explicit symbol mapping for {signal_row['symbol_raw']}")
         execution_fields["mt5_symbol"] = mt5_symbol
         self._db.update_execution(execution_id, {"mt5_symbol": mt5_symbol})
+        # Persist the resolved symbol now, before any later step can fail --
+        # it is real audit information regardless of what happens next.
+        self._db.set_symbol_normalized(signal_id, mt5_symbol)
 
         # 4. MT5 connection
         if not self._ensure_connected():
             return finish(ExecutionStatus.FAILED_MT5_UNAVAILABLE, "Unable to connect to MT5 terminal")
+
+        # 4b. account identity (needed to namespace all daily risk state below)
+        account = self._gateway.account_info()
+        if account is None:
+            return finish(ExecutionStatus.FAILED_MT5_UNAVAILABLE, "Unable to retrieve account info")
+        account_key = account_key_for(account)
+        if account_key is None:
+            return finish(
+                ExecutionStatus.FAILED_MT5_UNAVAILABLE,
+                "Unable to reliably determine MT5 account identity (server/login) for daily state namespacing",
+            )
+        self._db.update_execution(execution_id, {"account_key": account_key})
+        current_equity = account.equity
 
         # symbol availability
         symbol_info = self._gateway.ensure_symbol(mt5_symbol)
@@ -147,6 +184,12 @@ class ExecutionService:
         entry_price = ask if action == SignalAction.BUY.value else bid
         self._db.update_execution(execution_id, {"entry_price": entry_price})
 
+        # Broker/server day, not UTC -- used for every daily-state key below.
+        # Never falls back to UTC/local time for risk enforcement.
+        broker_now = self._gateway.server_time(mt5_symbol)
+        if broker_now is None:
+            return finish(ExecutionStatus.FAILED_BROKER_TIME_UNKNOWN, "Unable to determine broker/server time from market tick")
+
         # 7. SL validation
         sl_check = risk_service.check_stop_loss(action, signal_row["stop_loss"], entry_price, self._settings.require_stop_loss)
         if not sl_check.ok:
@@ -158,28 +201,29 @@ class ExecutionService:
         if not spread_check.ok:
             return finish(spread_check.status, spread_check.reason)
 
-        # 9. trade-count validation
-        day_start = risk_service.start_of_trading_day().isoformat()
-        trades_today = self._db.count_executed_trades_since(day_start)
+        # 9. trade-count validation (scoped to this broker/account, broker-day)
+        day_start = risk_service.start_of_trading_day(broker_now).isoformat()
+        trades_today = self._db.count_executed_trades_since(account_key, day_start)
         trade_limit_check = risk_service.check_daily_trade_limit(trades_today, self._settings.max_trades_per_day)
         if not trade_limit_check.ok:
             return finish(trade_limit_check.status, trade_limit_check.reason)
 
         # 10. position-count validation
-        open_positions = [p for p in self._gateway.positions_get() if getattr(p, "magic", None) == self._settings.magic_number]
+        positions = self._gateway.positions_get()
+        if positions is None:
+            # MT5 failed to answer -- unknown must never be treated as zero.
+            logger.warning("MT5_POSITION_QUERY_FAILED error=%s", self._gateway.last_error())
+            return finish(ExecutionStatus.FAILED_MT5_STATE_UNKNOWN, "MT5 position query failed; cannot verify open-position count")
+        open_positions = [p for p in positions if getattr(p, "magic", None) == self._settings.magic_number]
         position_check = risk_service.check_position_limit(len(open_positions), self._settings.max_open_positions)
         if not position_check.ok:
             return finish(position_check.status, position_check.reason)
 
-        # 11. daily-loss validation
-        account = self._gateway.account_info()
-        if account is None:
-            return finish(ExecutionStatus.FAILED_MT5_UNAVAILABLE, "Unable to retrieve account info")
-        current_equity = account.equity
-        trading_day = risk_service.trading_day_key()
-        baseline = self._db.get_daily_loss_baseline(trading_day)
+        # 11. daily-loss validation (namespaced by account_key + broker day)
+        trading_day = risk_service.trading_day_key(broker_now)
+        baseline = self._db.get_daily_loss_baseline(account_key, trading_day)
         if baseline is None:
-            self._db.set_daily_loss_baseline(trading_day, current_equity)
+            self._db.set_daily_loss_baseline(account_key, trading_day, current_equity)
             baseline = current_equity
         loss_check = risk_service.check_daily_loss(current_equity, baseline, self._settings.max_daily_loss_percent)
         if not loss_check.ok:
@@ -232,15 +276,39 @@ class ExecutionService:
             # Ambiguous: broker may or may not have received it. Do not blindly retry.
             return finish(ExecutionStatus.REVIEW_REQUIRED, "order_send returned no result; manual reconciliation required")
 
-        if self._is_send_success(send_retcode):
+        comment = getattr(send_result, "comment", "")
+        order_ticket = getattr(send_result, "order", None)
+        deal_ticket = getattr(send_result, "deal", None)
+        executed_volume = getattr(send_result, "volume", None)
+        executed_price = getattr(send_result, "price", None)
+        exposure_fields = {
+            "order_ticket": order_ticket,
+            "deal_ticket": deal_ticket,
+            "executed_volume": executed_volume,
+            "executed_price": executed_price,
+        }
+
+        if send_retcode == TRADE_RETCODE_DONE:
+            return finish(ExecutionStatus.EXECUTED, comment or "order_send success", **exposure_fields)
+
+        if send_retcode == TRADE_RETCODE_DONE_PARTIAL:
+            # Real exposure exists at less than the requested volume. Record
+            # it and stop -- never automatically send the remaining volume.
+            return finish(ExecutionStatus.EXECUTED_PARTIAL, comment or "order_send partial fill", **exposure_fields)
+
+        if send_retcode == TRADE_RETCODE_PLACED:
+            # PLACED describes a resting/pending order. This bridge only ever
+            # submits TRADE_ACTION_DEAL market orders, so seeing PLACED here
+            # is unexpected -- treat it as ambiguous rather than assume it
+            # means either a fill or a clean rejection.
             return finish(
-                ExecutionStatus.EXECUTED,
-                getattr(send_result, "comment", "order_send success"),
-                order_ticket=getattr(send_result, "order", None),
-                deal_ticket=getattr(send_result, "deal", None),
+                ExecutionStatus.REVIEW_REQUIRED,
+                f"Unexpected PLACED retcode for a market order: comment={comment}",
+                order_ticket=order_ticket,
+                deal_ticket=deal_ticket,
             )
 
-        return finish(ExecutionStatus.FAILED_ORDER_SEND, f"retcode={send_retcode} comment={getattr(send_result, 'comment', '')}")
+        return finish(ExecutionStatus.FAILED_ORDER_SEND, f"retcode={send_retcode} comment={comment}")
 
     # -- helpers ----------------------------------------------------------
 
@@ -301,8 +369,4 @@ class ExecutionService:
     @staticmethod
     def _is_check_success(retcode: int | None) -> bool:
         # TRADE_RETCODE_DONE=10009 is what order_check returns for a request that would succeed.
-        return retcode in (0, 10009)
-
-    @staticmethod
-    def _is_send_success(retcode: int | None) -> bool:
-        return retcode == 10009  # TRADE_RETCODE_DONE
+        return retcode in (0, TRADE_RETCODE_DONE)

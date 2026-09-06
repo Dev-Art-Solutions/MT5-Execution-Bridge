@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Removes the scheduled task created by install-service.ps1.
+    Removes the scheduled task created by install-autostart.ps1.
 #>
 
 param(

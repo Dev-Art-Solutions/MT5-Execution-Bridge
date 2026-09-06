@@ -15,9 +15,9 @@ class SignalCreate(BaseModel):
     timestamp: datetime
     symbol: str = Field(min_length=1, max_length=50)
     action: str
-    risk_percent: float = Field(gt=0)
-    stop_loss: float | None = None
-    take_profit: float | None = None
+    risk_percent: float = Field(gt=0, le=100, allow_inf_nan=False)
+    stop_loss: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    take_profit: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     strategy: str | None = None
     comment: str | None = None
 

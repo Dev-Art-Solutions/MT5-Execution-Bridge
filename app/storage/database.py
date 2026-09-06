@@ -132,22 +132,38 @@ class Database:
                 "SELECT * FROM signals WHERE status = 'PROCESSING'"
             ).fetchall()
 
+    def set_symbol_normalized(self, signal_id: str, symbol_normalized: str) -> None:
+        """Persist the resolved broker symbol immediately, before later
+        validation steps can fail -- the mapping decision is real audit
+        information regardless of what happens to the signal afterward."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE signals SET symbol_normalized = ?, updated_at = ? WHERE signal_id = ?",
+                (symbol_normalized, _utcnow_iso(), signal_id),
+            )
+
     # -- executions --------------------------------------------------------
 
     def insert_execution(self, record: dict[str, Any]) -> int:
+        record = {
+            "account_key": None,
+            "executed_volume": None,
+            "executed_price": None,
+            **record,
+        }
         with self._lock, self._conn:
             cursor = self._conn.execute(
                 """
                 INSERT INTO executions (
-                    signal_id, attempt, started_at, finished_at, dry_run, mt5_symbol,
+                    signal_id, account_key, attempt, started_at, finished_at, dry_run, mt5_symbol,
                     requested_action, calculated_volume, entry_price, stop_loss, take_profit,
                     order_check_retcode, order_send_retcode, order_ticket, deal_ticket,
-                    result_message, status
+                    executed_volume, executed_price, result_message, status
                 ) VALUES (
-                    :signal_id, :attempt, :started_at, :finished_at, :dry_run, :mt5_symbol,
+                    :signal_id, :account_key, :attempt, :started_at, :finished_at, :dry_run, :mt5_symbol,
                     :requested_action, :calculated_volume, :entry_price, :stop_loss, :take_profit,
                     :order_check_retcode, :order_send_retcode, :order_ticket, :deal_ticket,
-                    :result_message, :status
+                    :executed_volume, :executed_price, :result_message, :status
                 )
                 """,
                 record,
@@ -172,34 +188,42 @@ class Database:
                 (signal_id,),
             ).fetchall()
 
-    def count_executed_trades_since(self, since_iso: str) -> int:
+    def count_executed_trades_since(self, account_key: str, since_iso: str) -> int:
+        """Count bridge-originated trades for one account since a timestamp.
+
+        Scoped by account_key so switching MT5 account/server while reusing
+        the same SQLite database can never inherit another account's count.
+        Counts EXECUTED, EXECUTED_PARTIAL, and RECOVERED_EXECUTED only --
+        DRY_RUN_APPROVED, rejections, and failures never occupy a trade slot.
+        """
         with self._lock:
             row = self._conn.execute(
                 """
                 SELECT COUNT(*) AS n FROM executions
-                WHERE status IN ('EXECUTED', 'RECOVERED_EXECUTED') AND started_at >= ?
+                WHERE status IN ('EXECUTED', 'EXECUTED_PARTIAL', 'RECOVERED_EXECUTED')
+                  AND account_key = ? AND started_at >= ?
                 """,
-                (since_iso,),
+                (account_key, since_iso),
             ).fetchone()
             return row["n"] if row else 0
 
     # -- daily loss baseline -------------------------------------------------
 
-    def get_daily_loss_baseline(self, trading_day: str) -> float | None:
+    def get_daily_loss_baseline(self, account_key: str, trading_day: str) -> float | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT baseline_equity FROM daily_loss_baseline WHERE trading_day = ?",
-                (trading_day,),
+                "SELECT baseline_equity FROM daily_loss_baseline WHERE account_key = ? AND trading_day = ?",
+                (account_key, trading_day),
             ).fetchone()
             return row["baseline_equity"] if row else None
 
-    def set_daily_loss_baseline(self, trading_day: str, equity: float) -> None:
+    def set_daily_loss_baseline(self, account_key: str, trading_day: str, equity: float) -> None:
         with self._lock, self._conn:
             self._conn.execute(
                 """
-                INSERT INTO daily_loss_baseline (trading_day, baseline_equity, recorded_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(trading_day) DO NOTHING
+                INSERT INTO daily_loss_baseline (account_key, trading_day, baseline_equity, recorded_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(account_key, trading_day) DO NOTHING
                 """,
-                (trading_day, equity, _utcnow_iso()),
+                (account_key, trading_day, equity, _utcnow_iso()),
             )

@@ -25,6 +25,7 @@ SCHEMA_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS executions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         signal_id TEXT NOT NULL,
+        account_key TEXT,
         attempt INTEGER NOT NULL,
         started_at TEXT NOT NULL,
         finished_at TEXT,
@@ -39,6 +40,8 @@ SCHEMA_STATEMENTS = [
         order_send_retcode INTEGER,
         order_ticket INTEGER,
         deal_ticket INTEGER,
+        executed_volume REAL,
+        executed_price REAL,
         result_message TEXT,
         status TEXT NOT NULL,
         FOREIGN KEY (signal_id) REFERENCES signals (signal_id)
@@ -46,11 +49,14 @@ SCHEMA_STATEMENTS = [
     """,
     """
     CREATE TABLE IF NOT EXISTS daily_loss_baseline (
-        trading_day TEXT PRIMARY KEY,
+        account_key TEXT NOT NULL,
+        trading_day TEXT NOT NULL,
         baseline_equity REAL NOT NULL,
-        recorded_at TEXT NOT NULL
+        recorded_at TEXT NOT NULL,
+        PRIMARY KEY (account_key, trading_day)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_signals_status ON signals (status)",
     "CREATE INDEX IF NOT EXISTS idx_executions_signal_id ON executions (signal_id)",
+    "CREATE INDEX IF NOT EXISTS idx_executions_account_started ON executions (account_key, started_at)",
 ]

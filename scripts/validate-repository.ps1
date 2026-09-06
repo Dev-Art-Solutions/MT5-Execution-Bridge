@@ -36,7 +36,7 @@ $trackedFiles = git ls-files
 
 Assert-True (-not ($trackedFiles -contains ".env")) ".env must not be tracked by Git"
 
-$planCandidates = $trackedFiles | Where-Object { $_ -match "CLAUDE_CODE_PLAN\.md$" }
+$planCandidates = $trackedFiles | Where-Object { $_ -match "CLAUDE.*PLAN\.md$" }
 Assert-True ($planCandidates.Count -eq 0) "Private implementation plan must not be tracked by Git: $($planCandidates -join ', ')"
 
 Assert-True (-not ($trackedFiles | Where-Object { $_ -like "*.private.md" })) "*.private.md files must not be tracked by Git"

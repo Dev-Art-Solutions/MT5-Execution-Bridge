@@ -70,6 +70,29 @@ risk-percent bound, volume calculation, `order_check()`, then
 `order_send()`. There is no path from signal to broker order that skips a
 step.
 
+### Unknown is not the same as zero or safe
+
+An MT5 API call can fail rather than return an empty/negative answer --
+`positions_get()` returning `None` means "MT5 could not answer," not "zero
+positions." Collapsing that into an empty list would let an infrastructure
+failure silently look like a clean risk state and approve a trade it
+shouldn't. The gateway preserves the distinction (`list | None`), and the
+pipeline fails closed (`FAILED_MT5_STATE_UNKNOWN`) rather than treating
+"unknown" as "safe." The same principle governs `order_send()`: a resting-
+order retcode (`PLACED`) on what is always a market-order flow is
+`REVIEW_REQUIRED`, not assumed to be either a fill or a clean miss.
+
+### Broker day, not UTC day
+
+MT5 reports its own server clock, which is not UTC and not the host
+machine's local time -- and daily risk controls (loss baseline, trade
+count) have to reset on the *broker's* midnight, not an arbitrary one. The
+bridge derives the trading day from the last market tick's own timestamp,
+and namespaces that daily state by broker server + account login so
+switching MT5 accounts against the same local database can never inherit
+another account's numbers. An undeterminable broker clock or account
+identity fails the signal closed rather than guessing.
+
 ### Local deployment
 
 MT5's Python integration expects an interactive session with the
@@ -100,6 +123,10 @@ chosen based on what was actually tested, not assumed -- see
 | Crash after `order_send()` | `MEB:<hash>` reconciliation -> `RECOVERED_EXECUTED` or `REVIEW_REQUIRED` |
 | MT5 unreachable | Bounded retry (max 3) before send; `FAILED_MT5_UNAVAILABLE` |
 | Broker rejects the order | `order_check()` catches most cases (`REJECTED_ORDER_CHECK`); a live rejection is `FAILED_ORDER_SEND` |
+| Partial fill (`TRADE_RETCODE_DONE_PARTIAL`) | `EXECUTED_PARTIAL`, real fill persisted, remainder never auto-sent |
+| Unexpected `PLACED` retcode on a market order | `REVIEW_REQUIRED`, not assumed safe |
+| MT5 position query fails | `FAILED_MT5_STATE_UNKNOWN`; never treated as zero open positions |
+| Broker/server time undeterminable | `FAILED_BROKER_TIME_UNKNOWN`; never silently falls back to UTC |
 | Unmapped/unavailable symbol | `REJECTED_SYMBOL` / `REJECTED_SYMBOL_UNAVAILABLE` |
 | Excessive spread at execution time | `REJECTED_SPREAD` |
 | Daily loss threshold breached | `REJECTED_DAILY_LOSS`; blocks new execution, does not liquidate |

@@ -51,15 +51,27 @@ if (Test-Path ".env.example") {
     $failures += ".env.example not found; cannot verify safe defaults"
 }
 
-$secretPatterns = @("password\s*=\s*['""]?[A-Za-z0-9]", "BEGIN (RSA|EC) PRIVATE KEY", "api[_-]?key\s*=\s*['""]?[A-Za-z0-9]{10,}")
+# Matched per line (not -Raw) so `\s*` can never cross a newline into an
+# unrelated later token -- that previously produced false positives like
+# "MT5_PASSWORD=" (empty placeholder) matching across blank lines into the
+# next variable, and `password=self._settings.mt5_password` (a kwarg fed
+# from config, not a literal) matching because a `=` and letters followed
+# it somewhere on the line. Only an actual quoted literal counts as a hit.
+$secretPatterns = @(
+    "(password|passwd|pwd)\s*[:=]\s*[`"'][^`"'\s]{4,}[`"']",
+    "BEGIN (RSA|EC|OPENSSH|PGP) PRIVATE KEY",
+    "api[_-]?key\s*[:=]\s*[`"'][^`"'\s]{10,}[`"']"
+)
 foreach ($file in $trackedFiles) {
+    if ($file -eq "scripts/validate-repository.ps1") { continue }
     if (-not (Test-Path $file -PathType Leaf)) { continue }
     if ($file -match "\.(png|jpg|jpeg|gif|ico|db)$") { continue }
-    $content = Get-Content $file -Raw -ErrorAction SilentlyContinue
-    if (-not $content) { continue }
+    $lines = Get-Content $file -ErrorAction SilentlyContinue
+    if (-not $lines) { continue }
     foreach ($pattern in $secretPatterns) {
-        if ($content -match $pattern -and $file -ne "scripts/validate-repository.ps1") {
-            $failures += "Possible secret pattern '$pattern' found in tracked file: $file"
+        $hit = $lines | Select-String -Pattern $pattern | Select-Object -First 1
+        if ($hit) {
+            $failures += "Possible secret pattern '$pattern' found in tracked file: ${file}:$($hit.LineNumber)"
         }
     }
 }

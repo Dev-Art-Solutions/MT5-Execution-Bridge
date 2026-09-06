@@ -11,8 +11,8 @@ The bridge decides whether that request is valid and safe to execute.
 This is the third project in the Dev Art Solutions trading portfolio:
 
 ```text
-TradeAudit    = post-trade analytics, behavioral review, quantitative analysis
-RiskGuard     = native MQL5 risk monitoring and safety controls
+TradeAudit           = post-trade analytics, behavioral review, quantitative analysis
+MT5 RiskGuard        = native MQL5 risk monitoring and safety controls
 MT5 Execution Bridge = local signal ingestion, risk validation, MT5 execution
 ```
 
@@ -196,11 +196,15 @@ pass on an MT5 demo account before enabling live execution.
   claims about trading results.
 - Demo testing (`docs/TEST_PLAN.md`) is required before any live use.
 
-## Dev Art Solutions
+## Dev Art Solutions Trading Systems
 
-Part of a three-project trading infrastructure portfolio demonstrating
-Python, FastAPI, SQLite, and MetaTrader 5 integration with a deterministic,
-auditable risk gate between signal and execution.
+Part of the Dev Art Solutions trading systems portfolio:
+
+- [TradeAudit](https://github.com/Dev-Art-Solutions/TradeAudit) -- post-trade analytics and behavioral intelligence
+- [MT5 RiskGuard](https://github.com/Dev-Art-Solutions/RiskGuard) -- native MQL5 risk controls
+- MT5 Execution Bridge -- local-first Python <-> MT5 execution infrastructure
+
+https://trading.devart.solutions
 
 ## License
 

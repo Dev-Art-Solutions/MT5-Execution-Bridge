@@ -113,6 +113,52 @@ def test_health_and_status_endpoints(tmp_path):
         assert "password" not in status
 
 
+def test_account_endpoint_reports_balance_without_credentials(tmp_path):
+    app, _fake = _build_app(tmp_path)
+    with TestClient(app) as client:
+        account = client.get("/api/account").json()
+        assert account["balance"] == 10_000.0
+        assert "server" not in account
+        assert "login" not in account
+
+
+def test_positions_endpoint_reports_open_positions(tmp_path):
+    from types import SimpleNamespace
+
+    app, fake = _build_app(tmp_path)
+    fake.positions = [
+        SimpleNamespace(ticket=1, symbol="EURUSD", type=0, volume=0.1, price_open=1.09,
+                        price_current=1.091, sl=1.08, tp=1.10, profit=1.0, swap=0.0, magic=0, time=0)
+    ]
+    with TestClient(app) as client:
+        positions = client.get("/api/positions").json()
+        assert len(positions) == 1
+        assert positions[0]["symbol"] == "EURUSD"
+
+
+def test_orders_endpoint_reports_pending_orders(tmp_path):
+    from types import SimpleNamespace
+
+    app, fake = _build_app(tmp_path)
+    fake.orders = [
+        SimpleNamespace(ticket=2, symbol="EURUSD", type=2, volume_current=0.2, price_open=1.05,
+                        sl=1.04, tp=1.06, magic=0, time_setup=0)
+    ]
+    with TestClient(app) as client:
+        orders = client.get("/api/orders").json()
+        assert len(orders) == 1
+        assert orders[0]["symbol"] == "EURUSD"
+
+
+def test_account_endpoint_503s_when_mt5_is_unavailable(tmp_path):
+    app, fake = _build_app(tmp_path)
+    fake.connect_ok = False
+    app.state.gateway._connected = False
+    with TestClient(app) as client:
+        response = client.get("/api/account")
+        assert response.status_code == 503
+
+
 def test_mapped_symbol_persisted_through_api(tmp_path):
     app, _ = _build_app(tmp_path)
     with TestClient(app) as client:

@@ -24,6 +24,7 @@ class MT5Module(Protocol):
     def symbol_select(self, symbol: str, enable: bool) -> bool: ...
     def symbol_info_tick(self, symbol: str) -> Any: ...
     def positions_get(self, **kwargs: Any) -> Any: ...
+    def orders_get(self, **kwargs: Any) -> Any: ...
     def history_deals_get(self, *args: Any, **kwargs: Any) -> Any: ...
     def order_calc_profit(self, action: Any, symbol: str, volume: float, price_open: float, price_close: float) -> float | None: ...
     def order_check(self, request: dict[str, Any]) -> Any: ...
@@ -138,6 +139,16 @@ class MT5Gateway:
         if self._mt5 is None:
             return None
         result = self._mt5.positions_get(**kwargs)
+        if result is None:
+            return None
+        return list(result)
+
+    def orders_get(self, **kwargs: Any) -> list[Any] | None:
+        """Pending (resting) orders -- distinct from positions_get()'s open
+        fills. Same None-means-unknown contract as positions_get()."""
+        if self._mt5 is None:
+            return None
+        result = self._mt5.orders_get(**kwargs)
         if result is None:
             return None
         return list(result)

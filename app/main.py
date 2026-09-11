@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api import health, signals, status
+from app.api import account, health, signals, status
 from app.config import Settings, get_settings
 from app.services.execution_service import ExecutionService
 from app.services.mt5_gateway import MT5Gateway
@@ -73,6 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(status.router)
     app.include_router(signals.router)
+    app.include_router(account.router)
 
     return app
 

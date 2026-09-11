@@ -91,6 +91,47 @@ class ExecutionService:
                 return {"order": getattr(deal, "order", None), "deal": getattr(deal, "ticket", None)}
         return None
 
+    # -- read-only queries ------------------------------------------------
+    # For a signal source (or an agent watching the account) that only wants
+    # to know the current state, not change it. Never exposes credentials --
+    # only the trading-relevant fields, same policy as /api/status.
+
+    _ACCOUNT_FIELDS = ("balance", "equity", "margin", "margin_free", "margin_level", "profit", "currency")
+    _POSITION_FIELDS = (
+        "ticket", "symbol", "type", "volume", "price_open", "price_current",
+        "sl", "tp", "profit", "swap", "magic", "time",
+    )
+    _ORDER_FIELDS = (
+        "ticket", "symbol", "type", "volume_current", "price_open", "sl", "tp", "magic", "time_setup",
+    )
+
+    def account_snapshot(self) -> dict[str, Any] | None:
+        """Account balance/equity/margin, or None if MT5 is unavailable."""
+        if not self._ensure_connected():
+            return None
+        account = self._gateway.account_info()
+        if account is None:
+            return None
+        return {field: getattr(account, field, None) for field in self._ACCOUNT_FIELDS}
+
+    def positions_snapshot(self) -> list[dict[str, Any]] | None:
+        """Open positions, or None if MT5 is unavailable or the query failed."""
+        if not self._ensure_connected():
+            return None
+        positions = self._gateway.positions_get()
+        if positions is None:
+            return None
+        return [{field: getattr(item, field, None) for field in self._POSITION_FIELDS} for item in positions]
+
+    def orders_snapshot(self) -> list[dict[str, Any]] | None:
+        """Pending (resting) orders, or None if MT5 is unavailable."""
+        if not self._ensure_connected():
+            return None
+        orders = self._gateway.orders_get()
+        if orders is None:
+            return None
+        return [{field: getattr(item, field, None) for field in self._ORDER_FIELDS} for item in orders]
+
     # -- main pipeline --------------------------------------------------
 
     def process_signal(self, signal_row: Any) -> ExecutionStatus:

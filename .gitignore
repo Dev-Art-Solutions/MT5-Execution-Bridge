@@ -9,8 +9,12 @@ scratch/
 .env
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 data/*.db
 data/*.db-journal
+data/*.db-wal
+data/*.db-shm
 
 __pycache__/
 *.pyc

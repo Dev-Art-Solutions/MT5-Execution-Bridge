@@ -29,6 +29,14 @@ class FakeMT5:
         self.account_login: int | None = 12345
         self.positions: list[SimpleNamespace] = []
         self.positions_fail = False
+        self.orders: list[SimpleNamespace] = []
+        self.orders_fail = False
+        self.account_balance = 10_000.0
+        self.account_margin = 0.0
+        self.account_margin_free = 10_000.0
+        self.account_margin_level = 0.0
+        self.account_profit = 0.0
+        self.account_currency = "USD"
         self.deals: list[SimpleNamespace] = []
         self.calc_profit_per_lot: float | None = -100.0  # loss for a 1-lot move to SL
         self.order_check_retcode = TRADE_RETCODE_DONE
@@ -60,7 +68,11 @@ class FakeMT5:
         return (0, "")
 
     def account_info(self) -> SimpleNamespace:
-        return SimpleNamespace(equity=self.account_equity, server=self.account_server, login=self.account_login)
+        return SimpleNamespace(
+            equity=self.account_equity, server=self.account_server, login=self.account_login,
+            balance=self.account_balance, margin=self.account_margin, margin_free=self.account_margin_free,
+            margin_level=self.account_margin_level, profit=self.account_profit, currency=self.account_currency,
+        )
 
     def symbol_info(self, symbol: str) -> SimpleNamespace | None:
         return self.symbols.get(symbol)
@@ -80,6 +92,11 @@ class FakeMT5:
         if self.positions_fail:
             return None
         return list(self.positions)
+
+    def orders_get(self, **kwargs: Any) -> list[SimpleNamespace] | None:
+        if self.orders_fail:
+            return None
+        return list(self.orders)
 
     def history_deals_get(self, date_from: Any, date_to: Any, **kwargs: Any) -> list[SimpleNamespace]:
         return list(self.deals)

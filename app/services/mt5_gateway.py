@@ -56,6 +56,22 @@ class MT5Gateway:
 
     @property
     def connected(self) -> bool:
+        """Whether the terminal is actually still there, not just whether
+        initialize() once said so.
+
+        The MT5 terminal can drop the connection -- closed, network loss,
+        crashed -- without ever calling back through this SDK, so a boolean
+        set once by initialize()/shutdown() goes stale the moment that
+        happens: every caller that trusts it (including this class's own
+        _ensure_connected()-style callers, and /api/status) keeps reporting
+        "connected" while every real call fails. account_info() is the
+        cheapest real liveness probe the SDK offers, so a cached True is
+        re-validated against it rather than returned on faith.
+        """
+        if not self._connected or self._mt5 is None:
+            return False
+        if self._mt5.account_info() is None:
+            self._connected = False
         return self._connected
 
     def initialize(self, terminal_path: str | None = None, login: int | None = None,

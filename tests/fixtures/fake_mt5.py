@@ -37,6 +37,7 @@ class FakeMT5:
         self.account_margin_level = 0.0
         self.account_profit = 0.0
         self.account_currency = "USD"
+        self.account_info_fail = False
         self.deals: list[SimpleNamespace] = []
         self.calc_profit_per_lot: float | None = -100.0  # loss for a 1-lot move to SL
         self.order_check_retcode = TRADE_RETCODE_DONE
@@ -67,7 +68,9 @@ class FakeMT5:
     def last_error(self) -> tuple[int, str]:
         return (0, "")
 
-    def account_info(self) -> SimpleNamespace:
+    def account_info(self) -> SimpleNamespace | None:
+        if self.account_info_fail:
+            return None
         return SimpleNamespace(
             equity=self.account_equity, server=self.account_server, login=self.account_login,
             balance=self.account_balance, margin=self.account_margin, margin_free=self.account_margin_free,

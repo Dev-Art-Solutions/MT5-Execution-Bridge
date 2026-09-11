@@ -19,6 +19,35 @@ def test_positions_get_failure_returns_none():
     assert gateway.positions_get() is None
 
 
+def test_connected_self_heals_when_the_terminal_drops_without_shutdown():
+    """The terminal can vanish -- closed, network loss -- without ever
+    calling back through the SDK. A cached True from initialize() must not
+    keep reporting connected forever once account_info() actually fails."""
+    mt5 = FakeMT5()
+    gateway = MT5Gateway(mt5_module=mt5)
+    assert gateway.initialize() is True
+    assert gateway.connected is True
+
+    mt5.account_info_fail = True
+    assert gateway.connected is False
+
+    # And it stays correctly false, rather than flapping back true from the
+    # stale internal flag on a second read.
+    assert gateway.connected is False
+
+
+def test_connected_recovers_once_the_terminal_answers_again():
+    mt5 = FakeMT5()
+    gateway = MT5Gateway(mt5_module=mt5)
+    gateway.initialize()
+    mt5.account_info_fail = True
+    assert gateway.connected is False
+
+    mt5.account_info_fail = False
+    gateway.initialize()
+    assert gateway.connected is True
+
+
 def test_server_time_derived_from_tick():
     mt5 = FakeMT5()
     known_time = datetime(2026, 9, 7, 3, 0, tzinfo=UTC)
